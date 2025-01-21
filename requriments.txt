@@ -1,0 +1,8 @@
+django
+llama-index
+groq
+python-dotenv
+pandas
+plotly
+dash
+ 
