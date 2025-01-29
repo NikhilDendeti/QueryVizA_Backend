@@ -296,7 +296,6 @@ def visualize_results(results, x_axis=None, y_axis=None):
     )
     fig.show()
 
-# List of all 20 queries
 user_queries = ["Get all the men"]
 
 # Main Execution
@@ -318,3 +317,151 @@ if __name__ == "__main__":
                 print(f"Query Execution Failed for Query {i}: {results['error']}")
         else:
             print(f"Failed to generate SQL query for Query {i}")
+
+
+
+
+# import os
+# import sqlite3
+# import pandas as pd
+# import plotly.graph_objs as go
+# from dotenv import load_dotenv
+# from llama_index.llms.groq import Groq
+# import kagglehub
+
+# # Load environment variables
+# load_dotenv()
+
+# groq_api_key = os.getenv("GROQ_API_KEY")
+# if not groq_api_key:
+#     raise EnvironmentError("GROQ_API_KEY is not set. Ensure it is properly configured.")
+
+# # Initialize the Groq Llama model
+# llm = Groq(model="llama-3.3-70b-versatile", api_key=groq_api_key)
+
+# # Function to process a CSV file into a DataFrame
+# def process_csv_to_dataframe(csv_file_path):
+#     try:
+#         data = pd.read_csv(csv_file_path)
+#         return data
+#     except Exception as e:
+#         print(f"Error reading CSV: {e}")
+#         return None
+
+# # Function to rephrase the user query
+# def rephrase_query(user_query):
+#     try:
+#         response = llm.complete(
+#             prompt=f"Rephrase the following user query into a formal and structured SQL-compatible version:\n{user_query}",
+#             max_tokens=50
+#         )
+#         return response.text.strip()
+#     except Exception as e:
+#         print(f"Error rephrasing query: {e}")
+#         return user_query
+
+# # Function to generate SQL query
+# def generate_query(user_query, columns):
+#     try:
+#         rephrased_query = rephrase_query(user_query)
+#         response = llm.complete(
+#             prompt=f"""
+# Generate a valid and complete SQL query for SQLite. Assume the table name is 'uploaded_data' and it has the following columns:
+# {', '.join(columns)}.
+# Ensure the query is complete and does not truncate.
+# {rephrased_query}.
+# """,
+#             max_tokens=300  # Increased token limit for larger queries
+#         )
+#         query = response.text.strip()
+#         if "SELECT" in query:
+#             query = query[query.find("SELECT"):]
+#         query = query.split(";")[0]
+#         if not query.endswith(";"):  # Validate completeness of the query
+#             query += ";"
+#         return query
+#     except Exception as e:
+#         print(f"Error generating query: {e}")
+#         return None
+
+# # Function to execute the SQL query
+# def execute_query(sql_query, connection):
+#     try:
+#         cursor = connection.cursor()
+#         cursor.execute(sql_query)
+#         columns = [desc[0] for desc in cursor.description]
+#         results = [dict(zip(columns, row)) for row in cursor.fetchall()]
+#         cursor.close()
+#         return {"success": True, "data": results}
+#     except sqlite3.Error as e:
+#         return {"success": False, "error": str(e)}
+
+# # Function to visualize query results
+# def visualize_results(results, x_axis=None, y_axis=None):
+#     if not results["success"] or not results["data"]:
+#         print("No data to visualize.")
+#         return
+
+#     df = pd.DataFrame(results["data"])
+#     if not x_axis or not y_axis:
+#         print("Insufficient data for visualization.")
+#         return
+
+#     fig = go.Figure(data=[go.Bar(x=df[x_axis], y=df[y_axis])])
+#     fig.update_layout(
+#         title=f"{x_axis.capitalize()} vs {y_axis.capitalize()}",
+#         xaxis_title=x_axis.capitalize(),
+#         yaxis_title=y_axis.capitalize(),
+#     )
+#     fig.show()
+
+# # Main Execution
+# if __name__ == "__main__":
+#     # Download the dataset from Kaggle
+#     path = kagglehub.dataset_download("taweilo/store-sales-data-20222023")
+
+#     # List all files in the dataset directory to identify the correct CSV file
+#     dataset_files = [f for f in os.listdir(path) if f.endswith(".csv")]
+#     if not dataset_files:
+#         print("No CSV files found in the dataset.")
+#         exit()
+
+#     # Use the first CSV file found (update logic if multiple CSVs need specific handling)
+#     file_path = os.path.join(path, dataset_files[0])
+#     print(f"Using CSV file: {file_path}")
+
+#     # Check file extension
+#     if file_path.endswith(".csv"):
+#         data = process_csv_to_dataframe(file_path)
+#     else:
+#         print("Unsupported file format.")
+#         exit()
+
+#     if data is None:
+#         print("Failed to process file into a DataFrame.")
+#         exit()
+
+#     # Load data into an in-memory SQLite database
+#     connection = sqlite3.connect(":memory:")
+#     data.to_sql("uploaded_data", connection, if_exists="replace", index=False)
+
+#     # Example user query
+#     user_query = "Get total sales for each store"
+
+#     # Generate SQL query
+#     sql_query = generate_query(user_query, data.columns)
+#     if sql_query:
+#         print(f"Generated SQL Query:\n{sql_query}")
+
+#         # Execute SQL query
+#         results = execute_query(sql_query, connection)
+#         if results["success"]:
+#             print(f"Query Results:\n{results['data']}")
+#             if len(results["data"]) > 0:
+#                 keys = list(results["data"][0].keys())
+#                 if len(keys) >= 2:
+#                     visualize_results(results, x_axis=keys[0], y_axis=keys[1])
+#         else:
+#             print(f"Query Execution Failed: {results['error']}")
+#     else:
+#         print("Failed to generate SQL query.")

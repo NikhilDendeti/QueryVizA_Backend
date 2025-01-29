@@ -1,0 +1,259 @@
+import os
+import pandas as pd
+import plotly.graph_objs as go
+from fastapi import FastAPI, UploadFile, File, Form
+from fastapi.responses import JSONResponse
+from PyPDF2 import PdfReader
+from dotenv import load_dotenv
+from groq import Groq
+from fastapi.middleware.cors import CORSMiddleware
+import google.generativeai as genai
+import json
+
+load_dotenv()
+
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
+
+genai.configure(api_key=GOOGLE_API_KEY)
+
+DEFAULT_CHART_EXAMPLES = """
+Here are examples of different Plotly charts:
+
+1. Bar Chart:
+```python
+fig = go.Figure(data=[go.Bar(x=df['x_column'], y=df['y_column'])])
+fig.update_layout(title='Bar Chart Example', xaxis_title='X-Axis', yaxis_title='Y-Axis')
+```
+
+2. Line Chart:
+```python
+fig = go.Figure(data=[go.Scatter(x=df['x_column'], y=df['y_column'], mode='lines')])
+fig.update_layout(title='Line Chart Example', xaxis_title='X-Axis', yaxis_title='Y-Axis')
+```
+
+3. Scatter Plot:
+```python
+fig = go.Figure(data=[go.Scatter(x=df['x_column'], y=df['y_column'], mode='markers')])
+fig.update_layout(title='Scatter Plot Example', xaxis_title='X-Axis', yaxis_title='Y-Axis')
+```
+
+4. Pie Chart:
+```python
+fig = go.Figure(data=[go.Pie(labels=df['label_column'], values=df['value_column'])])
+fig.update_layout(title='Pie Chart Example')
+```
+
+5. Heatmap:
+```python
+fig = go.Figure(data=[go.Heatmap(z=df['z_column'], x=df['x_column'], y=df['y_column'])])
+fig.update_layout(title='Heatmap Example', xaxis_title='X-Axis', yaxis_title='Y-Axis')
+```
+"""
+
+# Initialize FastAPI app
+app = FastAPI()
+
+# Add CORS middleware to the app
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Replace "*" with your frontend's URL for better security
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+
+def initialize_google_model(model_name: str):
+    """Initialize the specified Google Generative AI model and start a chat session."""
+    try:
+        # Define the generation configuration
+        generation_config = {
+            "temperature": 1,
+            "top_p": 0.95,
+            "top_k": 40,
+            "max_output_tokens": 8192,
+            "response_mime_type": "text/plain",
+        }
+
+        # Create the model instance
+        model = genai.GenerativeModel(
+            model_name=model_name,
+            generation_config=generation_config,
+        )
+
+        # Start a chat session with an empty history
+        chat_session = model.start_chat(history=[])
+
+        return chat_session
+    except Exception as e:
+        raise RuntimeError(f"Error initializing Google Generative AI model: {str(e)}")
+
+
+# Initialize the specified LLM model
+def initialize_model(model_name: str, source: str):
+    if source in ["Hugging Face","Meta","Mistral AI"]:
+        client = Groq(api_key=GROQ_API_KEY)
+        return client
+    elif source == "Gemini":
+        return initialize_google_model(model_name)
+    else:
+        raise ValueError("Unsupported model selected")
+
+# Analyze dataset and recommend visualization using LLM
+def analyze_and_recommend(data: pd.DataFrame, model_instance, model_name) -> dict:
+    try:
+        columns = ", ".join(data.columns)
+        prompt = f"""
+        You are a highly trained data visualization assistant. Your job is to analyze datasets and recommend the most insightful visualization for understanding the data.
+
+        Dataset Columns: {columns}
+
+        Guidelines:
+        - Examine the column names and infer their likely data types and relationships.
+        - Suggest the best type of chart for visualizing the data (e.g., bar chart, line chart, scatter plot, pie chart, heatmap).
+        - For charts requiring axes (e.g., bar, scatter, line), specify the most appropriate X-axis and Y-axis columns.
+        - Provide a clear explanation (rationale) for why this chart type is the best choice.
+        - Suggest any additional columns that can enhance the visualization (e.g., color, size, or labels for better insights).
+        - Don't give me any resonings only the give JSON Format.
+        - Don't specify json in the response.
+
+        Examples of visualizations include:
+        {DEFAULT_CHART_EXAMPLES}
+
+        Ensure your response adheres to the following JSON structure strictly:
+        ```
+        {{
+            "chart_type": "string",        // The recommended chart type (e.g., "bar", "line", "scatter", etc.)
+            "x_axis": "string or null",    // Column name for the X-axis (or null if not applicable)
+            "y_axis": "string or null",    // Column name for the Y-axis (or null if not applicable)
+            "label_column": "string or null", // Column name for labels (or null if not applicable)
+            "value_column": "string or null", // Column name for values (or null if not applicable)
+            "rationale": "string"          // Explanation of why this chart type is recommended
+        }}
+        """
+
+        
+        completion = model_instance.chat.completions.create(
+            model=model_name,
+            messages=[{"role": "system", "content": prompt}],
+            temperature=1,
+            max_completion_tokens=1024
+        )
+
+        response_content = completion.choices[0].message.content
+        print(response_content)
+        recommendation = json.loads(response_content)
+
+        required_keys = {"chart_type", "x_axis", "y_axis", "label_column", "value_column", "rationale"}
+        if not required_keys.issubset(recommendation.keys()):
+            raise ValueError("Response JSON is missing required keys.")
+
+        return recommendation
+
+    except json.JSONDecodeError as e:
+        raise RuntimeError(f"Invalid JSON response: {e}")
+    except Exception as e:
+        raise RuntimeError(f"Error analyzing and recommending chart: {e}")
+
+# Generate Plotly chart based on recommendation
+def generate_plotly_chart(data: pd.DataFrame, chart_recommendation: dict) -> dict:
+    
+    try:
+        chart_type = chart_recommendation.get("chart_type")
+        x_axis = chart_recommendation.get("x_axis")
+        y_axis = chart_recommendation.get("y_axis")
+        label_column = chart_recommendation.get("label_column")
+        value_column = chart_recommendation.get("value_column")
+        rationale = chart_recommendation.get("rationale")
+
+        if not chart_type:
+            raise ValueError("No chart type recommended.")
+        if chart_type in ["bar", "line", "scatter", "heatmap"] and (not x_axis or not y_axis):
+            raise ValueError("X-axis or Y-axis missing for chart.")
+        # if chart_type == "pie" and (not x_axis or not y_axis):
+        #     raise ValueError("Columns for pie chart are missing.")
+
+        if chart_type == "bar":
+            if not x_axis or not y_axis:
+                raise ValueError("Both x_axis and y_axis must be specified for a bar chart.")
+            fig = go.Figure(data=[go.Bar(x=data[x_axis], y=data[y_axis])])
+
+        elif chart_type == "line":
+            if not x_axis or not y_axis:
+                raise ValueError("Both x_axis and y_axis must be specified for a line chart.")
+            fig = go.Figure(data=[go.Scatter(x=data[x_axis], y=data[y_axis], mode="lines")])
+
+        elif chart_type == "scatter":
+            if not x_axis or not y_axis:
+                raise ValueError("Both x_axis and y_axis must be specified for a scatter chart.")
+            fig = go.Figure(data=[go.Scatter(x=data[x_axis], y=data[y_axis], mode="markers")])
+
+        elif chart_type == "pie":
+            if not label_column or not value_column:
+                raise ValueError("Both label_column and value_column must be specified for a pie chart.")
+            fig = go.Figure(data=[go.Pie(labels=data[label_column], values=data[value_column])])
+
+        elif chart_type == "heatmap":
+            if not x_axis or not y_axis:
+                raise ValueError("Both x_axis and y_axis must be specified for a heatmap.")
+            fig = go.Figure(data=[go.Heatmap(z=data[y_axis], x=data[x_axis], y=data[y_axis])])
+
+        else:
+            raise ValueError(f"Unsupported chart type: {chart_type}")
+
+        fig.update_layout(
+            title=f"{chart_type.capitalize()} Visualization",
+            xaxis_title=x_axis.capitalize() if x_axis else None,
+            yaxis_title=y_axis.capitalize() if y_axis else None,
+            template="plotly_white"
+        )
+
+        return {
+            "recommendation": chart_recommendation,
+            "chart": fig.to_json(),
+        }
+
+    except KeyError as e:
+        raise RuntimeError(f"Missing key in chart recommendation: {e}")
+    except Exception as e:
+        raise RuntimeError(f"Error generating Plotly chart: {e}")
+
+# FastAPI endpoint to process uploaded files
+@app.post("/process-file/")
+async def process_file(file: UploadFile = File(...), model_name: str = Form(...), source: str = Form(...)):
+    try:
+        # Add debug logs
+        print(f"Model Name: {model_name}, Source: {source}")
+        print(f"File Content Type: {file.content_type}")
+
+        if file.content_type == "application/pdf":
+            pdf_reader = PdfReader(file.file)
+            text = "\n".join([page.extract_text() for page in pdf_reader.pages if page.extract_text()])
+            return {"success": True, "type": "pdf", "content": text}
+        elif file.content_type == "text/csv":
+            data = pd.read_csv(file.file)
+            if data.empty:
+                raise ValueError("Uploaded CSV file is empty.")
+        else:
+            return JSONResponse(content={"error": "Unsupported file type"}, status_code=400)
+
+        model = initialize_model(model_name, source)
+        chart_recommendation = analyze_and_recommend(data, model, model_name)
+        chart_json = generate_plotly_chart(data, chart_recommendation)
+
+        # Log the response before returning
+        print(f"Chart Recommendation: {chart_recommendation}")
+        print(f"Chart JSON: {chart_json}")
+        print(type(chart_json))
+
+        return {"success": True, "recommendation": chart_recommendation, "chart": chart_json}
+
+    except Exception as e:
+        print(f"Error: {e}")  # Add error logging
+        return JSONResponse(content={"error": str(e)}, status_code=500)
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)

@@ -5,4 +5,14 @@ python-dotenv
 pandas
 plotly
 dash
- 
+streamlit
+matplotlib
+seaborn
+fastapi
+uvicorn
+pandas
+python-dotenv
+matplotlib
+seaborn
+PyPDF2
+google.generativeai
