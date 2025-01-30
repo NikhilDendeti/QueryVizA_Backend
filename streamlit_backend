@@ -106,18 +106,39 @@ def analyze_and_recommend(data: pd.DataFrame, model_instance, model_name) -> dic
     try:
         columns = ", ".join(data.columns)
         prompt = f"""
-        You are a highly trained data visualization assistant. Your job is to analyze datasets and recommend the most insightful visualization for understanding the data.
+        You are a highly skilled data visualization assistant. Your task is to analyze the given dataset and determine the most appropriate Plotly chart types for visualizing the data effectively.
 
         Dataset Columns: {columns}
+
+        ## **Guidelines for Visualization Selection**
+        - **Choose the most appropriate chart types** based on the data distribution and relationships (e.g., bar chart for categorical comparisons, scatter plot for numerical correlations, pie chart for proportions, etc.).
+        - **Only include valid column mappings**:
+        - Ensure that `x_axis` and `y_axis` are **never null** for charts that require both axes (e.g., bar, line, scatter, heatmap).
+        - Ensure that `label_column` and `value_column` are **never null** for pie charts.
+        - **Ensure meaningful axis selections**:
+        - Do **not** use non-numeric columns for `y_axis` unless appropriate (e.g., counts, aggregations).
+        - Avoid using high-cardinality categorical columns as `x_axis` unless meaningful.
+        - **If a chart type is not appropriate, DO NOT include it.**
+        - Do not include charts that lack the required numerical or categorical relationships.
+        - Do not suggest heatmaps or scatter plots if they do not have valid numeric or categorical pairings.
+        - If a chart field is missing or not meaningful, **restructure the response** instead of leaving fields `null`.
 
         Guidelines:
         - Examine the column names and infer their likely data types and relationships.
         - Suggest the best type of chart for visualizing the data (e.g., bar chart, line chart, scatter plot, pie chart, heatmap).
-        - For charts requiring axes (e.g., bar, scatter, line), specify the most appropriate X-axis and Y-axis columns.
+        - For charts requiring axes (e.g., bar, scatter, line), specify the most appropriate X-axis and Y-axis columns .
+        - Ensure for which you are recommending the chart type and like wise give the appropriate X-axis and Y-axis ensure you didn't miss anything.
+        - Suggest all relevant chart types based on the dataset.
+        - Ensure that for each chart type, all required axes and values are specified.
+        - If multiple charts can be useful, suggest all relevant ones.
+        - Ensure completeness and correctness of the recommendations before responding.
         - Provide a clear explanation (rationale) for why this chart type is the best choice.
         - Suggest any additional columns that can enhance the visualization (e.g., color, size, or labels for better insights).
         - Don't give me any resonings only the give JSON Format.
+         Respond strictly in **valid JSON format** as a **single list** of objects.
+        - **DO NOT return multiple separate JSON objects.** Instead, return a single JSON array like this:
         - Don't specify json in the response.
+        - Retry up to 3 times in case of missing fields before reporting an error.
 
         Examples of visualizations include:
         {DEFAULT_CHART_EXAMPLES}
@@ -146,11 +167,28 @@ def analyze_and_recommend(data: pd.DataFrame, model_instance, model_name) -> dic
         print(response_content)
         recommendation = json.loads(response_content)
 
-        required_keys = {"chart_type", "x_axis", "y_axis", "label_column", "value_column", "rationale"}
-        if not required_keys.issubset(recommendation.keys()):
-            raise ValueError("Response JSON is missing required keys.")
+        if not isinstance(recommendation, list):
+            raise ValueError("Response should be a list of chart recommendations")
 
-        return recommendation
+        required_keys = {"chart_type", "rationale"}
+
+        optional_keys = {"x_axis", "y_axis", "label_column", "value_column"}
+        
+        validated_recommendations = []
+        for idx, recommendation in enumerate(recommendation):
+            # Ensure all required keys are present
+            if not required_keys.issubset(recommendation.keys()):
+                missing = required_keys - recommendation.keys()
+                raise ValueError(f"Entry {idx} missing required keys: {', '.join(missing)}")
+
+            # Ensure optional keys are either present or null
+            for key in optional_keys:
+                if key not in recommendation:
+                    recommendation[key] = None  # Set missing optional keys to null
+
+            validated_recommendations.append(recommendation)
+
+        return validated_recommendations
 
     except json.JSONDecodeError as e:
         raise RuntimeError(f"Invalid JSON response: {e}")
@@ -159,7 +197,6 @@ def analyze_and_recommend(data: pd.DataFrame, model_instance, model_name) -> dic
 
 # Generate Plotly chart based on recommendation
 def generate_plotly_chart(data: pd.DataFrame, chart_recommendation: dict) -> dict:
-    
     try:
         chart_type = chart_recommendation.get("chart_type")
         x_axis = chart_recommendation.get("x_axis")
@@ -168,41 +205,49 @@ def generate_plotly_chart(data: pd.DataFrame, chart_recommendation: dict) -> dic
         value_column = chart_recommendation.get("value_column")
         rationale = chart_recommendation.get("rationale")
 
+        # Handle "null" strings
+        if x_axis == "null":
+            x_axis = None
+        if y_axis == "null":
+            y_axis = None
+        if label_column == "null":
+            label_column = None
+        if value_column == "null":
+            value_column = None
+
+        # Validate required fields
         if not chart_type:
             raise ValueError("No chart type recommended.")
-        if chart_type in ["bar", "line", "scatter", "heatmap"] and (not x_axis or not y_axis):
-            raise ValueError("X-axis or Y-axis missing for chart.")
-        # if chart_type == "pie" and (not x_axis or not y_axis):
-        #     raise ValueError("Columns for pie chart are missing.")
 
+        if chart_type in ["bar", "line", "scatter", "heatmap"] and (not x_axis or not y_axis):
+            raise ValueError(f"Both x_axis and y_axis must be specified for a {chart_type} chart.")
+
+        if chart_type == "pie" and (not label_column or not value_column):
+            raise ValueError("Both label_column and value_column must be specified for a pie chart.")
+
+        # Generate the appropriate chart
         if chart_type == "bar":
-            if not x_axis or not y_axis:
-                raise ValueError("Both x_axis and y_axis must be specified for a bar chart.")
             fig = go.Figure(data=[go.Bar(x=data[x_axis], y=data[y_axis])])
 
         elif chart_type == "line":
-            if not x_axis or not y_axis:
-                raise ValueError("Both x_axis and y_axis must be specified for a line chart.")
             fig = go.Figure(data=[go.Scatter(x=data[x_axis], y=data[y_axis], mode="lines")])
 
         elif chart_type == "scatter":
-            if not x_axis or not y_axis:
-                raise ValueError("Both x_axis and y_axis must be specified for a scatter chart.")
             fig = go.Figure(data=[go.Scatter(x=data[x_axis], y=data[y_axis], mode="markers")])
 
         elif chart_type == "pie":
-            if not label_column or not value_column:
-                raise ValueError("Both label_column and value_column must be specified for a pie chart.")
             fig = go.Figure(data=[go.Pie(labels=data[label_column], values=data[value_column])])
 
         elif chart_type == "heatmap":
             if not x_axis or not y_axis:
                 raise ValueError("Both x_axis and y_axis must be specified for a heatmap.")
-            fig = go.Figure(data=[go.Heatmap(z=data[y_axis], x=data[x_axis], y=data[y_axis])])
+            z_values = data.groupby([x_axis, y_axis]).size().unstack(fill_value=0)
+            fig = go.Figure(data=[go.Heatmap(z=z_values.values, x=z_values.columns, y=z_values.index)])
 
         else:
             raise ValueError(f"Unsupported chart type: {chart_type}")
 
+        # Update layout
         fig.update_layout(
             title=f"{chart_type.capitalize()} Visualization",
             xaxis_title=x_axis.capitalize() if x_axis else None,
@@ -216,42 +261,58 @@ def generate_plotly_chart(data: pd.DataFrame, chart_recommendation: dict) -> dic
         }
 
     except KeyError as e:
-        raise RuntimeError(f"Missing key in chart recommendation: {e}")
+        raise RuntimeError(f"Missing key in data or recommendation: {e}")
     except Exception as e:
         raise RuntimeError(f"Error generating Plotly chart: {e}")
+
 
 # FastAPI endpoint to process uploaded files
 @app.post("/process-file/")
 async def process_file(file: UploadFile = File(...), model_name: str = Form(...), source: str = Form(...)):
     try:
-        # Add debug logs
         print(f"Model Name: {model_name}, Source: {source}")
         print(f"File Content Type: {file.content_type}")
 
+        # Handle PDF files
         if file.content_type == "application/pdf":
             pdf_reader = PdfReader(file.file)
             text = "\n".join([page.extract_text() for page in pdf_reader.pages if page.extract_text()])
             return {"success": True, "type": "pdf", "content": text}
+
+        # Handle CSV files
         elif file.content_type == "text/csv":
             data = pd.read_csv(file.file)
             if data.empty:
                 raise ValueError("Uploaded CSV file is empty.")
+
+            # Initialize the model
+            model = initialize_model(model_name, source)
+
+            # Get chart recommendations
+            recommendations = analyze_and_recommend(data, model, model_name)
+
+            # Generate charts for each recommendation
+            charts = []
+            for recommendation in recommendations:
+                try:
+                    chart_json = generate_plotly_chart(data, recommendation)
+                    charts.append(chart_json)
+                except Exception as e:
+                    print(f"Error generating chart for recommendation: {recommendation}. Error: {e}")
+                    continue  # Skip this recommendation and continue with the next one
+
+            return {
+                "success": True,
+                "recommendations": recommendations,
+                "charts": charts
+            }
+
+        # Handle unsupported file types
         else:
             return JSONResponse(content={"error": "Unsupported file type"}, status_code=400)
 
-        model = initialize_model(model_name, source)
-        chart_recommendation = analyze_and_recommend(data, model, model_name)
-        chart_json = generate_plotly_chart(data, chart_recommendation)
-
-        # Log the response before returning
-        print(f"Chart Recommendation: {chart_recommendation}")
-        print(f"Chart JSON: {chart_json}")
-        print(type(chart_json))
-
-        return {"success": True, "recommendation": chart_recommendation, "chart": chart_json}
-
     except Exception as e:
-        print(f"Error: {e}")  # Add error logging
+        print(f"Error: {e}")
         return JSONResponse(content={"error": str(e)}, status_code=500)
 
 if __name__ == "__main__":

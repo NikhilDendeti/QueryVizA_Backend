@@ -141,6 +141,8 @@
 #     main()
 
 
+
+
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
@@ -148,7 +150,7 @@ import requests
 import json
 import traceback
 
-BACKEND_URL = "http://10.17.85.48:8000"  
+BACKEND_URL = "http://10.17.85.48:8000"  # Replace with your backend URL
 
 def load_and_validate_data(uploaded_file) -> pd.DataFrame:
     """Load and validate the uploaded CSV file."""
@@ -190,19 +192,17 @@ def display_plotly_chart(chart_json):
         else:
             raise ValueError("Invalid input type for chart_json. Must be a JSON string or dictionary.")
 
-        if "chart" in chart_dict:
-            chart_data = json.loads(chart_dict["chart"])  
+        if "data" in chart_dict and "layout" in chart_dict:
+            fig = go.Figure(data=chart_dict["data"], layout=chart_dict["layout"])
         else:
-            raise ValueError("The provided JSON does not contain a 'chart' key.")
-
-        fig = go.Figure(chart_data)
+            raise ValueError("The provided JSON does not contain valid 'data' and 'layout' keys.")
 
         st.plotly_chart(fig, use_container_width=True)
     except Exception as e:
-        import traceback
         traceback.print_exc()
         st.error("Error rendering the chart. Ensure the dataset contains numeric or categorical data suitable for visualization.")
         st.error(f"Technical Details: {str(e)}")
+
 def main():
     st.set_page_config(page_title="AI-Powered Visualization", layout="wide")
 
@@ -224,19 +224,12 @@ def main():
 
             st.subheader("Model Selection")
             model_options = {
-                # "Hugging Face": ["distil-whisper-large-v3-en"],
                 "Meta": [
                     "llama-3.1-8b-instant",
                     "llama-3.2-11b-vision-preview",
                     "llama-3.3-70b-specdec",
                     "llama-3.3-70b-versatile",
                 ],
-                # "Mistral AI": ["mixtral-8x7b-32768"],
-                # "Gemini": [
-                #     "Gemini 1.5 Pro",
-                #     "Gemini 2.0 Flash Experimental",
-                #     "LearnLM 1.5 Pro Experimental",
-                # ],
             }
 
             model_group = st.selectbox("Select Model Group", list(model_options.keys()))
@@ -252,12 +245,16 @@ def main():
                         with st.spinner("Processing your data..."):
                             result = process_file_with_backend(uploaded_file, selected_model, model_group)
                             if result and result.get("success"):
-                                st.subheader("AI Recommendation")
-                                st.write(result.get("recommendation", "No recommendation provided."))
+                                st.subheader("AI Recommendations")
+                                recommendations = result.get("recommendations", [])
+                                charts = result.get("charts", [])
 
-                                if "chart" in result:
-                                    st.subheader("Generated Visualization")
-                                    display_plotly_chart(result["chart"])  # Pass the chart JSON string
+                                for idx, (recommendation, chart) in enumerate(zip(recommendations, charts)):
+                                    st.markdown(f"### Recommendation {idx + 1}")
+                                    st.write(recommendation)
+
+                                    st.markdown(f"#### Chart {idx + 1}")
+                                    display_plotly_chart(chart["chart"])
 
                                 if st.checkbox("Show Summary Statistics"):
                                     st.subheader("Summary Statistics")
