@@ -170,6 +170,9 @@ def process_file_with_backend(file, model_name: str, source: str) -> dict:
         files = {"file": ("uploaded_file.csv", file.getvalue(), "text/csv")}
         data = {"model_name": model_name, "source": source}
 
+        if source == "Gemini":
+            data["model_name"] = model_name.replace(" ", "-").lower()
+
         response = requests.post(f"{BACKEND_URL}/process-file/", files=files, data=data)
 
         if response.status_code == 200:
@@ -230,6 +233,11 @@ def main():
                     "llama-3.3-70b-specdec",
                     "llama-3.3-70b-versatile",
                 ],
+                "Gemini": [
+                    "Gemini 1.5 Pro",
+                    "Gemini 2.0 Flash Experimental",
+                    "LearnLM 1.5 Pro Experimental",
+                ]
             }
 
             model_group = st.selectbox("Select Model Group", list(model_options.keys()))

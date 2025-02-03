@@ -64,34 +64,26 @@ app.add_middleware(
 )
 
 
-
 def initialize_google_model(model_name: str):
-    """Initialize the specified Google Generative AI model and start a chat session."""
+    """Initialize Google Generative AI model with proper configuration."""
     try:
-        # Define the generation configuration
         generation_config = {
             "temperature": 1,
             "top_p": 0.95,
             "top_k": 40,
-            "max_output_tokens": 8192,
+            "max_output_tokens": 1024,
             "response_mime_type": "text/plain",
         }
 
-        # Create the model instance
         model = genai.GenerativeModel(
             model_name=model_name,
             generation_config=generation_config,
         )
-
-        # Start a chat session with an empty history
-        chat_session = model.start_chat(history=[])
-
-        return chat_session
+        return model.start_chat(history=[])
     except Exception as e:
-        raise RuntimeError(f"Error initializing Google Generative AI model: {str(e)}")
+        raise RuntimeError(f"Error initializing Google model: {str(e)}")
+   
 
-
-# Initialize the specified LLM model
 def initialize_model(model_name: str, source: str):
     if source in ["Hugging Face","Meta","Mistral AI"]:
         client = Groq(api_key=GROQ_API_KEY)
@@ -105,10 +97,23 @@ def initialize_model(model_name: str, source: str):
 def analyze_and_recommend(data: pd.DataFrame, model_instance, model_name) -> dict:
     try:
         columns = ", ".join(data.columns)
+        sample_data = data.head(3).to_dict(orient='records')
         prompt = f"""
-        You are a highly skilled data visualization assistant. Your task is to analyze the given dataset and determine the most appropriate Plotly chart types for visualizing the data effectively.
+        You are a seasoned data analyst. Your task is to provide a comprehensive analysis of the dataset to uncover key insights, trends, and patterns. Focus on delivering actionable business insights and highlighting important data characteristics.
+        
+        **Dataset Overview:**
+        - Columns: {columns}
+        - Sample Data: {sample_data}
 
-        Dataset Columns: {columns}
+
+        **Analysis Guidelines:**
+        1. **Data Overview**: Briefly describe the dataset structure and variables
+        2. **Key Trends**: Identify significant trends in the data (e.g., increases/decreases over time, category distributions)
+        3. **Patterns & Correlations**: Highlight notable correlations between variables
+        4. **Outliers/Anomalies**: Point out any unexpected values or inconsistencies
+        5. **Business Implications**: Suggest how these insights could impact business decisions
+        6. **Data Quality**: Note any missing values or data quality issues
+        7. **Visualization Strategy**: Explain how the recommended charts help answer key business questions
 
         ## **Guidelines for Visualization Selection**
         - **Choose the most appropriate chart types** based on the data distribution and relationships (e.g., bar chart for categorical comparisons, scatter plot for numerical correlations, pie chart for proportions, etc.).
@@ -152,18 +157,22 @@ def analyze_and_recommend(data: pd.DataFrame, model_instance, model_name) -> dic
             "label_column": "string or null", // Column name for labels (or null if not applicable)
             "value_column": "string or null", // Column name for values (or null if not applicable)
             "rationale": "string"          // Explanation of why this chart type is recommended
+            "Data Analyst": "string"      // Explanation as a Data analyst
         }}
         """
 
-        
-        completion = model_instance.chat.completions.create(
-            model=model_name,
-            messages=[{"role": "system", "content": prompt}],
-            temperature=1,
-            max_completion_tokens=1024
-        )
+        if isinstance(model_instance, genai.ChatSession):  # Google model
+            response = model_instance.send_message(prompt)
+            response_content = response.text
+        else:
+            completion = model_instance.chat.completions.create(
+                model=model_name,
+                messages=[{"role": "system", "content": prompt}],
+                temperature=1,
+                max_completion_tokens=1024
+            )
 
-        response_content = completion.choices[0].message.content
+            response_content = completion.choices[0].message.content
         print(response_content)
         recommendation = json.loads(response_content)
 
@@ -266,7 +275,6 @@ def generate_plotly_chart(data: pd.DataFrame, chart_recommendation: dict) -> dic
         raise RuntimeError(f"Error generating Plotly chart: {e}")
 
 
-# FastAPI endpoint to process uploaded files
 @app.post("/process-file/")
 async def process_file(file: UploadFile = File(...), model_name: str = Form(...), source: str = Form(...)):
     try:
@@ -316,5 +324,5 @@ async def process_file(file: UploadFile = File(...), model_name: str = Form(...)
         return JSONResponse(content={"error": str(e)}, status_code=500)
 
 if __name__ == "__main__":
-    import uvicorn
+    import uvicorn  
     uvicorn.run(app, host="0.0.0.0", port=8000)
