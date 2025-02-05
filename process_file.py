@@ -60,7 +60,7 @@ app = FastAPI()
 # Add CORS middleware to the app
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Replace "*" with your frontend's URL for better security
+    allow_origins=["*"], 
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -96,7 +96,6 @@ def initialize_model(model_name: str, source: str):
     else:
         raise ValueError("Unsupported model selected")
 
-# Analyze dataset and recommend visualization using LLM
 def analyze_and_recommend(data: pd.DataFrame, model_instance, model_name) -> dict:
     try:
         columns = ", ".join(data.columns)
@@ -207,7 +206,6 @@ def analyze_and_recommend(data: pd.DataFrame, model_instance, model_name) -> dic
     except Exception as e:
         raise RuntimeError(f"Error analyzing and recommending chart: {e}")
 
-# Generate Plotly chart based on recommendation
 def generate_plotly_chart(data: pd.DataFrame, chart_recommendation: dict) -> dict:
     try:
         chart_type = chart_recommendation.get("chart_type")
@@ -217,7 +215,6 @@ def generate_plotly_chart(data: pd.DataFrame, chart_recommendation: dict) -> dic
         value_column = chart_recommendation.get("value_column")
         rationale = chart_recommendation.get("rationale")
 
-        # Handle "null" strings
         if x_axis == "null":
             x_axis = None
         if y_axis == "null":
@@ -227,7 +224,6 @@ def generate_plotly_chart(data: pd.DataFrame, chart_recommendation: dict) -> dic
         if value_column == "null":
             value_column = None
 
-        # Validate required fields
         if not chart_type:
             raise ValueError("No chart type recommended.")
 
@@ -237,7 +233,6 @@ def generate_plotly_chart(data: pd.DataFrame, chart_recommendation: dict) -> dic
         if chart_type == "pie" and (not label_column or not value_column):
             raise ValueError("Both label_column and value_column must be specified for a pie chart.")
 
-        # Generate the appropriate chart
         if chart_type == "bar":
             fig = go.Figure(data=[go.Bar(x=data[x_axis], y=data[y_axis])])
 
@@ -259,7 +254,6 @@ def generate_plotly_chart(data: pd.DataFrame, chart_recommendation: dict) -> dic
         else:
             raise ValueError(f"Unsupported chart type: {chart_type}")
 
-        # Update layout
         fig.update_layout(
             title=f"{chart_type.capitalize()} Visualization",
             xaxis_title=x_axis.capitalize() if x_axis else None,
@@ -284,25 +278,20 @@ async def process_file(file: UploadFile = File(...), model_name: str = Form(...)
         print(f"Model Name: {model_name}, Source: {source}")
         print(f"File Content Type: {file.content_type}")
 
-        # Handle PDF files
         if file.content_type == "application/pdf":
             pdf_reader = PdfReader(file.file)
             text = "\n".join([page.extract_text() for page in pdf_reader.pages if page.extract_text()])
             return {"success": True, "type": "pdf", "content": text}
 
-        # Handle CSV files
         elif file.content_type == "text/csv":
             data = pd.read_csv(file.file)
             if data.empty:
                 raise ValueError("Uploaded CSV file is empty.")
 
-            # Initialize the model
             model = initialize_model(model_name, source)
 
-            # Get chart recommendations
             recommendations = analyze_and_recommend(data, model, model_name)
 
-            # Generate charts for each recommendation
             charts = []
             for recommendation in recommendations:
                 try:
@@ -310,15 +299,13 @@ async def process_file(file: UploadFile = File(...), model_name: str = Form(...)
                     charts.append(chart_json)
                 except Exception as e:
                     print(f"Error generating chart for recommendation: {recommendation}. Error: {e}")
-                    continue  # Skip this recommendation and continue with the next one
-
+                    continue  
             return {
                 "success": True,
                 "recommendations": recommendations,
                 "charts": charts
             }
 
-        # Handle unsupported file types
         else:
             return JSONResponse(content={"error": "Unsupported file type"}, status_code=400)
 
@@ -333,13 +320,11 @@ def extract_valid_json(response_text: str) -> dict:
     print(response_text)
     response_text = response_text.strip()
     
-    # Attempt direct JSON parsing
     try:
         return json.loads(response_text)
     except json.JSONDecodeError:
-        pass  # Continue to other methods
+        pass  
 
-    # Handle JSON wrapped in markdown code blocks
     json_match = re.search(
         r'```(?:json)?\s*({.*?})\s*```', 
         response_text, 
@@ -365,10 +350,8 @@ def process_uploaded_file(file: UploadFile):
     Processes the uploaded CSV file and loads it into an in-memory SQLite database.
     """
     try:
-        # Read file into pandas DataFrame
         data = pd.read_csv(file.file)
         
-        # Create an in-memory SQLite database and load the data
         connection = sqlite3.connect(":memory:")
         data.to_sql("users", connection, if_exists="replace", index=False)
         
@@ -459,3 +442,7 @@ async def upload_file(
 if __name__ == "__main__":
     import uvicorn  
     uvicorn.run(app, host="0.0.0.0", port=8000)
+
+
+
+
