@@ -9,7 +9,10 @@ from groq import Groq
 from fastapi.middleware.cors import CORSMiddleware
 import google.generativeai as genai
 import json
-
+from pandasql import sqldf
+import re
+import sqlite3
+from fastapi import FastAPI, File, UploadFile, Form, HTTPException
 load_dotenv()
 
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
@@ -322,6 +325,136 @@ async def process_file(file: UploadFile = File(...), model_name: str = Form(...)
     except Exception as e:
         print(f"Error: {e}")
         return JSONResponse(content={"error": str(e)}, status_code=500)
+    
+
+
+def extract_valid_json(response_text: str) -> dict:
+    """Enhanced JSON extraction with better error handling."""
+    print(response_text)
+    response_text = response_text.strip()
+    
+    # Attempt direct JSON parsing
+    try:
+        return json.loads(response_text)
+    except json.JSONDecodeError:
+        pass  # Continue to other methods
+
+    # Handle JSON wrapped in markdown code blocks
+    json_match = re.search(
+        r'```(?:json)?\s*({.*?})\s*```', 
+        response_text, 
+        re.DOTALL | re.IGNORECASE
+    )
+    if json_match:
+        try:
+            return json.loads(json_match.group(1))
+        except Exception as e:
+            raise RuntimeError(f"JSON in code block invalid: {str(e)}")
+
+    # Attempt to find JSON-like structure in text
+    try:
+        start = response_text.find('{')
+        end = response_text.rfind('}') + 1
+        return json.loads(response_text[start:end])
+    except Exception as e:
+        raise RuntimeError(f"Failed to extract JSON: {str(e)}")
+
+
+def process_uploaded_file(file: UploadFile):
+    """
+    Processes the uploaded CSV file and loads it into an in-memory SQLite database.
+    """
+    try:
+        # Read file into pandas DataFrame
+        data = pd.read_csv(file.file)
+        
+        # Create an in-memory SQLite database and load the data
+        connection = sqlite3.connect(":memory:")
+        data.to_sql("users", connection, if_exists="replace", index=False)
+        
+        return data, connection
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Error processing file: {str(e)}")
+
+def rephrase_query(user_query: str, llm, model_name):
+    """
+    Rephrases a user query into a more structured and formal version.
+    """
+    try:
+
+        prompt=f"""
+            Rephrase the following user query into a more formal and structured version:
+            {user_query}.
+        """
+
+        completion = llm.chat.completions.create(
+            model=model_name,
+                messages=[{"role": "system", "content": prompt}],
+                temperature=1,
+                max_completion_tokens=1024
+            )
+
+        response_content = completion.choices[0].message.content
+        print(response_content)
+
+        
+        return response_content.text.strip()
+    except Exception as e:
+        return user_query
+
+def chatbot_query(user_query: str, connection, data, llm, model_name):
+    """
+    Processes a user query by rephrasing, generating an SQL query, and executing it.
+    """
+    try:
+        rephrased_query = rephrase_query(user_query, llm, model_name)
+        prompt=f"""
+            Generate a valid SQL query for the following user query. 
+            Assume the users table has columns: {', '.join(data.columns)}. 
+            According to the colums take the column names and generate the SQL query properly.
+            Only return the raw SQL query without any additional text or Markdown formatting:
+            If there are spaces in the column names make sure in the SQL query you are using the square brackets.
+            {rephrased_query}.
+            """
+        completion = llm.chat.completions.create(
+            model=model_name,
+                messages=[{"role": "system", "content": prompt}],
+                temperature=1,
+                max_completion_tokens=1024
+            )
+
+        response_content = completion.choices[0].message.content
+        print(response_content)
+        generated_query = response_content.strip()
+        print(generated_query)
+        if generated_query.startswith("```") and generated_query.endswith("```"):
+            generated_query = generated_query.strip("```").strip("sql").strip()
+
+        cursor = connection.cursor()
+        cursor.execute(generated_query)
+        columns = [col[0] for col in cursor.description]
+        results = [dict(zip(columns, row)) for row in cursor.fetchall()]
+        cursor.close()
+
+        return {"success": True, "data": results}
+
+    except Exception as e:
+        return {"success": False, "error": f"Unexpected error: {str(e)}"}
+
+@app.post("/process-query/")
+async def upload_file(
+        file: UploadFile = File(...),
+    model_name: str = Form(...),
+    source: str = Form(...),
+    query: str = Form(...)
+):
+    """
+    Endpoint to upload a CSV file and execute a user query.
+    """
+    llm = initialize_model(model_name=model_name, source=source)
+    data, connection = process_uploaded_file(file)
+    response = chatbot_query(query, connection, data, llm, model_name)
+    return JSONResponse(content=response)
 
 if __name__ == "__main__":
     import uvicorn  
