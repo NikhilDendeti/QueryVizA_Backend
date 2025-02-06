@@ -223,7 +223,8 @@ def generate_plotly_chart(data: pd.DataFrame, chart_recommendation: dict) -> dic
             label_column = None
         if value_column == "null":
             value_column = None
-
+        
+        # use match case
         if not chart_type:
             raise ValueError("No chart type recommended.")
 
@@ -418,7 +419,7 @@ def chatbot_query(user_query: str, connection, data, llm, model_name):
         columns = [col[0] for col in cursor.description]
         results = [dict(zip(columns, row)) for row in cursor.fetchall()]
         cursor.close()
-
+        print(results)
         return {"success": True, "data": results}
 
     except Exception as e:
