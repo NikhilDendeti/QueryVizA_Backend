@@ -447,3 +447,4 @@ if __name__ == "__main__":
 
 
 
+# history storing with tool calling and structured output generator while giving the responce of the query based on the user input and the data available in the database.
